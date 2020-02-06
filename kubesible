@@ -8,6 +8,7 @@ import jinja2
 from getpass import getpass
 import subprocess
 
+DEFAULT_WAIT_TIME = 1
 CMD_KUSTOMIZE = "kustomize"
 CMD_PIPE = ["|"]
 CMD_KUBECTL_APPLY_F_STDIN = ["kubectl", "apply", "-f", "-"]
@@ -38,10 +39,11 @@ class Pycolor:
     END = '\033[0m'
 
 class Task:
-    def __init__(self,name, cmds, _type, dry_run):
+    def __init__(self,name, cmds, _type, wait, dry_run):
         self.name = name
         self.cmds = cmds
         self._type = _type
+        self.wait = wait if isinstance(wait, int) else DEFAULT_WAIT_TIME
         self.dry_run = dry_run
 
     def dumps_cmd(self):
@@ -79,6 +81,7 @@ def task2kubectl(cur_path, common, task, dry_run):
     n = common['namespace']
     k_conf = "{}/{}/{}".format(cur_path, KUBECONF_PATH, common['kubeconfig'])
     name = task['name']
+    wait = task.get("wait")
     task_docker_registry = task['kubectl'].get('docker-registry')
 
     cmd = []
@@ -86,7 +89,7 @@ def task2kubectl(cur_path, common, task, dry_run):
         cmd = _create_docker_registry(n, task_docker_registry)
         _type = task['kubectl']['type']
         if _type != 'Replace':
-            return Task(name, cmd, _type, dry_run)
+            return Task(name, cmd, _type, wait, dry_run)
 
         delete_cmd = CMD_KUBECTL_DELETE_SECRET.copy()
         delete_cmd.append(task_docker_registry['name'])
@@ -108,6 +111,7 @@ def task2kustomize(cur_path, common, task, dry_run):
     kustomize = task['kustomize']
     body_fp = kustomize['apply']
     _type = kustomize.get('type')
+    wait = task.get('wait')
 
     cmds = [
         CMD_KUSTOMIZE,
@@ -124,7 +128,7 @@ def task2kustomize(cur_path, common, task, dry_run):
     if k_conf or k_conf != '':
         fullcmd.append("--kubeconfig={}/{}/{}".format(cur_path, KUBECONF_PATH,k_conf))
 
-    return Task(name, fullcmd, _type=_type, dry_run=dry_run)
+    return Task(name, fullcmd, _type=_type, wait=wait, dry_run=dry_run)
 
 
 def task2(cur_path, common, task, dry_run):
@@ -162,7 +166,7 @@ def run_tasks(cur_path, common, tasks, dry_run=False):
         rc, content = task.do()
         if not content or content == '': continue
         task_log(rc, content, task)
-        time.sleep(1)
+        time.sleep(task.wait)
 
 
 def _sep_common_tasks(template):
