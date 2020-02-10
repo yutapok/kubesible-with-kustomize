@@ -184,6 +184,23 @@ def task_log(rc, content, task):
 
     sys.stdout.write(out)
 
+def task_progress(wait_time):
+    n = wait_time * 100
+    for _ in range(n):
+        sys.stdout.write("\b" + "|")
+        sys.stdout.flush()
+        time.sleep(0.0025)
+        sys.stdout.write("\b" + "/")
+        sys.stdout.flush()
+        time.sleep(0.0025)
+        sys.stdout.write("\b" + "-")
+        sys.stdout.flush()
+        time.sleep(0.0025)
+        sys.stdout.write("\b" + "\\")
+        sys.stdout.flush()
+        time.sleep(0.0025)
+    sys.stdout.write('\b' + ' ')
+    sys.stdout.flush()
 
 def run_tasks(cur_path, common, tasks, dry_run=False):
     bulk_tasks = (task2(cur_path, common, task, dry_run) for task in tasks)
@@ -191,7 +208,7 @@ def run_tasks(cur_path, common, tasks, dry_run=False):
         rc, content = task.do()
         if not content or content == '': continue
         task_log(rc, content, task)
-        time.sleep(task.wait)
+        task_progress(task.wait)
 
 
 def _sep_common_tasks(template):
