@@ -177,13 +177,21 @@ def task_progress(wait_time):
     sys.stdout.write('\b' + ' ')
     sys.stdout.flush()
 
-def run_tasks(cur_path, common, tasks, dry_run=False):
+def run_tasks(cur_path, common, tasks, skip_ignore=False, dry_run=False):
     bulk_tasks = (task2(cur_path, common, task, dry_run) for task in tasks)
     for task in bulk_tasks:
-        rc, content = task.do()
+        skip_bool = not skip_ignore and task._type == 'Skip'
+        if skip_bool:
+            rc, content = (0, "Skip task")
+        
+        else:
+            rc, content = task.do()
+
         if not content or content == '': continue
         task_log(rc, content, task)
-        task_progress(task.wait)
+
+        if not skip_bool:
+            task_progress(task.wait)
 
 
 def _sep_common_tasks(template):
@@ -216,7 +224,8 @@ def _renderer(src, dst, path="./"):
 
 
 def playbook_main():
-    dry_run = None
+    skip = False
+    dry_run = False
 
     if len(sys.argv) < 5:
         print("Usage: kubesible playbook <work path> <task.yaml path> <vars.yaml path> [--dry_run]")
@@ -236,10 +245,13 @@ def playbook_main():
     if '--dry_run' in opt_args:
         dry_run = True
 
+    if '--skip_ignore' in opt_args:
+        skip_ignore = True 
+
     template = _renderer(main_yaml, vars_yaml)
     tmp_common, tmp_tasks = _sep_common_tasks(template)
 
-    run_tasks(cur_path, tmp_common, tmp_tasks, dry_run)
+    run_tasks(cur_path, tmp_common, tmp_tasks, skip_ignore, dry_run)
 
 def scaffold_main():
     if len(sys.argv) < 4:
