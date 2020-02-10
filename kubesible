@@ -32,10 +32,10 @@ class Pycolor:
     PURPLE = '\033[35m'
     CYAN = '\033[36m'
     WHITE = '\033[37m'
-    RETURN = '\033[07m' #反転
-    ACCENT = '\033[01m' #強調
-    FLASH = '\033[05m' #点滅
-    RED_FLASH = '\033[05;41m' #赤背景+点滅
+    RETURN = '\033[07m'
+    ACCENT = '\033[01m'
+    FLASH = '\033[05m'
+    RED_FLASH = '\033[05;41m'
     END = '\033[0m'
 
 class Task:
@@ -76,29 +76,54 @@ def _create_docker_registry(n, dic):
 
     return cmd
 
+def _create_secret_literal(n, dic):
+    _name = dic['name']
+    _literal = dic['literal']
+    _value = dic['value']
+
+    cmd = [
+        "kubectl","create","secret","generic",_name, "--from-literal={}={}".format(_literal, _value), "-n", n
+    ]
+
+    return cmd
 
 def task2kubectl(cur_path, common, task, dry_run):
     n = common['namespace']
     k_conf = "{}/{}/{}".format(cur_path, KUBECONF_PATH, common['kubeconfig'])
     name = task['name']
+    _type = task['kubectl']['type']
     wait = task.get("wait")
     task_docker_registry = task['kubectl'].get('docker-registry')
+    task_secret_literal = task['kubectl'].get('secret')
 
     cmd = []
     if task_docker_registry:
         cmd = _create_docker_registry(n, task_docker_registry)
-        _type = task['kubectl']['type']
         if _type != 'Replace':
             return Task(name, cmd, _type, wait, dry_run)
 
-        delete_cmd = CMD_KUBECTL_DELETE_SECRET.copy()
-        delete_cmd.append(task_docker_registry['name'])
-        delete_cmd.append("-n")
-        delete_cmd.append(n)
+        cmd_pipe = _kubectl_with_delete_secret(cmd, task_docker_registry['name'], n)
 
-        return Task(name, delete_cmd + ["&&"] + cmd, _type, dry_run)
+        return Task(name, cmd_pipe, _type, wait, dry_run)
+
+    if task_secret_literal:
+        cmd = _create_secret_literal(n, task_secret_literal)
+        if _type != 'Replace':
+            return Task(name, cmd, _type, wait, dry_run)
+
+        cmd_pipe = _kubectl_with_delete_secret(cmd, task_secret_literal['literal'], n)
+
+        return Task(name, cmd_pipe, _type, wait, dry_run)
 
     return cmd
+
+def _kubectl_with_delete_secret(cmd, del_name, n):
+    delete_cmd = CMD_KUBECTL_DELETE_SECRET.copy()
+    delete_cmd.append(del_name)
+    delete_cmd.append("-n")
+    delete_cmd.append(n)
+
+    return delete_cmd + ["&&"] + cmd
 
 
 def task2kustomize(cur_path, common, task, dry_run):
