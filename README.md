@@ -1,10 +1,39 @@
 # kubesible-with-kustomize
 
-## Usage
+## About
+- deploy tool for k8s with kustomize on respect of ansbile interface
+- kubesible is treatment of handle deploy management
+  - in order, collect resources per services or something you need, safety treatment secret
+  - kustomize is for treatment of manifest per environment
 
-### init
+## Dependency
 ```
-$ sh install.sh
+kubectl
+kustomize
+python3
+```
+
+## Usage
+### init install
+```
+$ python3 -m venv <path>
+$ source <path>/bin/activate
+$ sh install
+```
+
+### enc
+```
+$ vim files/.secret.yml
+$ kubesible enc <cur_path>
+$ => Info: done encrypto to ./.secret.yml.enc
+```
+
+### playbook
+```
+$ kubesible playbook <cur_path> <taks.yaml> <var.yaml> [--option]
+option:
+  --dry-run
+  --skip-ignore
 ```
 
 ### scaffold
@@ -12,7 +41,40 @@ $ sh install.sh
 $ kubesible gen-scaffold sample_project ./
 ```
 
-### linked to files
+
+### Example
+#### 1.scaffold
+```
+$ kubesible gen-scaffold sample_project ./
+```
+create and edit yaml
+``` tasks/sample.yaml
+common:
+  env: {{ vars.env }}
+  namespace:  {{ vars.namespace }}
+  kubeconfig: {{ vars.kubeconfig }}
+  kustomize:
+    env_root: overlay
+    env: {{ vars.kustomize.env }}
+
+- name: create secret AWS_KEY
+  kubectl:
+    secret:
+      name: aws-key
+      literal: aws-access-key
+      value: $aws_access_key_id
+    type: None
+```
+``` vars/sample.yaml
+vars:
+  env: dev
+  namespace: dev
+  kubeconfig: k8s-cluster.conf
+  kustomize:
+    env: development
+```
+
+#### 2.linked to files
 ```
 # kustomize file path
 $ cd <kustomizes path>
@@ -23,8 +85,29 @@ $ cd <kubeconfig path>
 $ ln -s  <files dir path>
 ```
 
-#### Notice
-kustomize dir is prefered down below
+#### 3.enc
+- edit
+```
+$ vim files/.secret.yml
+aws_key:
+  envkey: aws_access_key_id
+  envval: sample
+```
+- run
+```
+$ kubesible enc .
+$ => Info: done encrypto to files/.secret.yml.enc
+```
+
+#### 4.playbook
+```
+$ kubesible playbook . sample_project/tasks/default.yaml sammple_project/vars/dev.yaml --dry_run
+# if ok
+$ kubesible playbook . sample_project/tasks/default.yaml sammple_project/vars/dev.yaml
+```
+
+### Notice
+- kustomize dir is prefered down below
 ``` sample
 .kustomizes
 ├── base
@@ -47,8 +130,4 @@ kustomize dir is prefered down below
                └── redis-failover.yaml
 ```
 
-### playbook
-```
-$ kubesible playbook . sample_project/tasks/default.yaml sammple_project/vars/dev.yaml --dry_run
-```
-
+- inside program, running basicaly such as kustomize build ... | kubectl apply -f -
