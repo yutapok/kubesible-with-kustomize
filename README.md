@@ -48,7 +48,9 @@ $ kubesible gen-scaffold sample_project ./
 $ kubesible gen-scaffold sample_project ./
 ```
 create and edit yaml
-``` tasks/sample.yaml
+```
+#tasks/sample.yaml
+
 common:
   env: {{ vars.env }}
   namespace:  {{ vars.namespace }}
@@ -65,7 +67,9 @@ common:
       value: $aws_access_key_id
     type: None
 ```
-``` vars/sample.yaml
+```
+#vars/sample.yaml
+
 vars:
   env: dev
   namespace: dev
