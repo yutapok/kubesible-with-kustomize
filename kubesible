@@ -7,6 +7,12 @@ import yaml
 import jinja2
 from getpass import getpass
 import subprocess
+import base64
+import hashlib
+from Crypto import Random
+from Crypto.Cipher import AES
+from Crypto.Util import Padding
+
 
 DEFAULT_WAIT_TIME = 1
 CMD_KUSTOMIZE = "kustomize"
@@ -14,14 +20,36 @@ CMD_PIPE = ["|"]
 CMD_KUBECTL_APPLY_F_STDIN = ["kubectl", "apply", "-f", "-"]
 CMD_KUBECTL_DELETE_SECRET = ["kubectl", "delete", "secret", "--ignore-not-found"]
 KUSTOMIZES_PATH = "files/kustomizes"
+DEFAULT_SECRET_FPATH = "files/.secret.yml.enc"
+DEFAULT_SECRET_RAW_FPATH = "files/.secret.yml"
 KUBECONF_PATH = "files/kubeconf"
 KUBECTL_DRY_RUN = "--dry-run"
+KUBECTL_SERVER_DRY_RUN = "--server-dry-run"
+CIPHER_ENV_VAR = "KBBOOK_CIPH_KEY"
 
 TEMPLATE_VARS_YAML = {"vars": {"env": "dev", "namespace": "default", "kubeconfig": "dev-cluster.conf", "kustomize": {"env": "development"}}}
 TEMPLATE_TASKS_YAML = {
   "common": {"env": "{{ vars.env }}", "namespace": "{{ vars.namespace }}", "kubeconfig": "{{ vars.kubeconfig }}", "kustomize": {"env_root": "overlay", "env": '{{ vars.kustomize.env }}'}},
   "tasks": [{"name": "deploy redis statefulset", "kustomize": {"apply": "common/redis", "type": "ignoreIfPresent"}}]
 }
+
+
+class AESCipher(object):
+    def __init__(self, key):
+        self.key = (hashlib.md5(key.encode('utf-8')).hexdigest()).encode('utf-8')
+
+    def encrypt(self, raw):
+        iv = Random.get_random_bytes(AES.block_size)
+        cipher = AES.new(self.key, AES.MODE_CBC, iv)
+        data = Padding.pad(raw.encode('utf-8'), AES.block_size, 'pkcs7')
+        return base64.b64encode(iv + cipher.encrypt(data))
+
+    def decrypt(self, enc):
+        enc = base64.b64decode(enc)
+        iv = enc[:AES.block_size]
+        cipher = AES.new(self.key, AES.MODE_CBC, iv)
+        data = Padding.unpad(cipher.decrypt(enc[AES.block_size:]), AES.block_size, 'pkcs7')
+        return data.decode('utf-8')
 
 class Pycolor:
     BLACK = '\033[30m'
@@ -38,7 +66,7 @@ class Pycolor:
     RED_FLASH = '\033[05;41m'
     END = '\033[0m'
 
-class Task:
+class KubeTask:
     def __init__(self,name, cmds, _type, wait, dry_run):
         self.name = name
         self.cmds = cmds
@@ -48,25 +76,27 @@ class Task:
 
     def dumps_cmd(self):
         if not self.dry_run:
-            return " ".join([cmd for cmd in self.cmds])
+            return " ".join([cmd for cmd in self.cmds if cmd])
 
         arr = self.cmds.copy()
-        arr.append(KUBECTL_DRY_RUN)
-        return " ".join([cmd for cmd in arr])
+        arr.append(self.dry_run)
+        return " ".join([cmd for cmd in arr if cmd])
 
     def do(self):
         return subprocess.getstatusoutput(self.dumps_cmd())
 
 
-def _create_docker_registry(n, dic):
+def _create_docker_registry(n, dic, kbconf):
     _name = dic['name']
     _server = dic['server']
     _user = dic['user']
     _pass = dic['pass']
     _email = "gmail.com"
 
+    _kconf = "--kubeconfig={}".format(kbconf) if kbconf else None
+
     cmd = [
-        "kubectl","create","secret","docker-registry",_name,
+        "kubectl",_kconf, "create","secret","docker-registry",_name,
         "--docker-server={}".format(_server),
         "--docker-username={}".format(_user),
         "--docker-password={}".format(_pass),
@@ -76,59 +106,65 @@ def _create_docker_registry(n, dic):
 
     return cmd
 
-def _create_secret_literal(n, dic):
+def _create_secret_literal(n, dic, k_conf):
     _name = dic['name']
     _literal = dic['literal']
     _value = dic['value']
-
+    _kconf = "--kubeconfig={}".format(k_conf) if k_conf else None
     cmd = [
-        "kubectl","create","secret","generic",_name, "--from-literal={}={}".format(_literal, _value), "-n", n
+        "kubectl",_kconf, "create","secret","generic",_name, "--from-literal={}={}".format(_literal, _value), "-n", n
     ]
 
     return cmd
 
 def task2kubectl(cur_path, common, task, dry_run):
     n = common['namespace']
-    k_conf = "{}/{}/{}".format(cur_path, KUBECONF_PATH, common['kubeconfig'])
+    _k_conf = common.get('kubeconfig')
+    k_conf = "{}/{}/{}".format(cur_path, KUBECONF_PATH, _k_conf) if _k_conf and _k_conf != 'None' else None
     name = task['name']
     _type = task['kubectl']['type']
     wait = task.get("wait")
     task_docker_registry = task['kubectl'].get('docker-registry')
     task_secret_literal = task['kubectl'].get('secret')
 
+    if dry_run:
+        dry_run = KUBECTL_DRY_RUN
+
     cmd = []
     if task_docker_registry:
-        cmd = _create_docker_registry(n, task_docker_registry)
+        cmd = _create_docker_registry(n, task_docker_registry, k_conf)
         if _type != 'Replace':
-            return Task(name, cmd, _type, wait, dry_run)
+            return KubeTask(name, cmd, _type, wait, dry_run)
 
-        cmd_pipe = _kubectl_with_delete_secret(cmd, task_docker_registry['name'], n)
-
-        return Task(name, cmd_pipe, _type, wait, dry_run)
+        cmd_pipe = _kubectl_with_delete_secret(cmd, task_docker_registry['name'], n, dry_run)
+        return KubeTask(name, cmd_pipe, _type, wait, dry_run)
 
     if task_secret_literal:
-        cmd = _create_secret_literal(n, task_secret_literal)
+        cmd = _create_secret_literal(n, task_secret_literal, k_conf)
         if _type != 'Replace':
-            return Task(name, cmd, _type, wait, dry_run)
+            return KubeTask(name, cmd, _type, wait, dry_run)
 
-        cmd_pipe = _kubectl_with_delete_secret(cmd, task_secret_literal['literal'], n)
-
-        return Task(name, cmd_pipe, _type, wait, dry_run)
+        cmd_pipe = _kubectl_with_delete_secret(cmd, task_secret_literal['literal'], n, dry_run)
+        return KubeTask(name, cmd_pipe, _type, wait, dry_run)
 
     return cmd
 
-def _kubectl_with_delete_secret(cmd, del_name, n):
+def _kubectl_with_delete_secret(cmd, del_name, n, dry_run):
     delete_cmd = CMD_KUBECTL_DELETE_SECRET.copy()
     delete_cmd.append(del_name)
     delete_cmd.append("-n")
     delete_cmd.append(n)
+    if dry_run:
+        msg = "no execution '{}'".format(" ".join([s for s in delete_cmd]))
+        delete_cmd = ['echo "{}"'.format(msg)]
 
     return delete_cmd + ["&&"] + cmd
 
 
 def task2kustomize(cur_path, common, task, dry_run):
     n = common['namespace']
-    k_conf = common['kubeconfig']
+    _k_conf = common.get('kubeconfig')
+    k_conf = "{}/{}/{}".format(cur_path, KUBECONF_PATH, _k_conf) if _k_conf and _k_conf != 'None' else None
     k_root = common['kustomize']['env_root']
     k_env = common['kustomize']['env']
 
@@ -150,10 +186,14 @@ def task2kustomize(cur_path, common, task, dry_run):
         fullcmd.append("-n")
         fullcmd.append(n)
 
-    if k_conf or k_conf != '':
-        fullcmd.append("--kubeconfig={}/{}/{}".format(cur_path, KUBECONF_PATH,k_conf))
 
-    return Task(name, fullcmd, _type=_type, wait=wait, dry_run=dry_run)
+    if k_conf:
+        fullcmd.append("--kubeconfig={}".format(k_conf))
+
+    if dry_run:
+        dry_run = KUBECTL_SERVER_DRY_RUN
+
+    return KubeTask(name, fullcmd, _type=_type, wait=wait, dry_run=dry_run)
 
 
 def task2(cur_path, common, task, dry_run):
@@ -208,7 +248,7 @@ def run_tasks(cur_path, common, tasks, skip_ignore=False, dry_run=False):
         skip_bool = not skip_ignore and task._type == 'Skip'
         if skip_bool:
             rc, content = (0, "Skip task")
-        
+
         else:
             rc, content = task.do()
 
@@ -247,9 +287,22 @@ def _renderer(src, dst, path="./"):
 
     return template
 
+def _secret_to_env_mp(cur_path):
+    with open("{}/{}".format(cur_path, DEFAULT_SECRET_FPATH), 'rb') as fp:
+       cikey = os.environ.get(CIPHER_ENV_VAR)
+       if not cikey:
+           print("Error: env-var 'KBBOOK_CIPH_KEY' was not found")
+           exit(1)
+
+       cipher = AESCipher(cikey)
+       d_yml = cipher.decrypt(fp.read())
+       secret_yml = yaml.load(d_yml,Loader=yaml.FullLoader)
+
+       return secret_yml
+
 
 def playbook_main():
-    skip = False
+    skip_ignore = False
     dry_run = False
 
     if len(sys.argv) < 5:
@@ -257,6 +310,11 @@ def playbook_main():
         exit(1)
 
     cur_path = os.path.abspath(sys.argv[2])
+    mp = _secret_to_env_mp(cur_path)
+    for pair in mp.values():
+        k, v = pair.values()
+        os.environ.setdefault(k, v)
+
 
     if not os.path.isdir("{}/{}".format(cur_path, KUSTOMIZES_PATH)):
         print("Error: 'files/kustomizes' path was not found, you must create dir or create link to 'kustomizes' dir")
@@ -267,11 +325,11 @@ def playbook_main():
 
     opt_args = sys.argv[5:]
 
-    if '--dry_run' in opt_args:
+    if '--dry-run' in opt_args:
         dry_run = True
 
-    if '--skip_ignore' in opt_args:
-        skip_ignore = True 
+    if '--skip-ignore' in opt_args:
+        skip_ignore = True
 
     template = _renderer(main_yaml, vars_yaml)
     tmp_common, tmp_tasks = _sep_common_tasks(template)
@@ -300,16 +358,36 @@ def scaffold_main():
     with open("{}/{}/tasks/default.yaml".format(dest_dir, pj_name), "w") as f:
         f.write(yaml.dump(TEMPLATE_TASKS_YAML).replace("'", ""))
 
+def enc_main():
+    if len(sys.argv) < 3:
+        print("Usage: kubesible enc ")
+        exit(1)
+    cur_path = sys.argv[2]
+    secret_fp = "{}/{}".format(cur_path, DEFAULT_SECRET_RAW_FPATH)
+    key = os.environ.get(CIPHER_ENV_VAR)
+    if not key:
+        print("Error: env-var 'KBBOOK_CIPH_KEY' was not found")
+        exit(1)
+
+    cipher = AESCipher(key)
+
+    with open(secret_fp, "r") as yml:
+        encrypted = cipher.encrypt(yml.read())
+
+    with open("./.secret.yml.enc", "w") as fp:
+        fp.write(encrypted.decode())
+
+    print("Info: done encrypto to ./.secret.yml.enc")
 
 if __name__ == '__main__':
 
     if len(sys.argv) < 3:
-        print("Usage: kubesible playbook/gen-scaffold .....")
+        print("Usage: kubesible playbook/gen-scaffold/enc .....")
         exit(1)
 
     action = sys.argv[1]
-    if action not in ("playbook", "gen-scaffold"):
-        print("Usage: kubesible playbook/gen-scaffold .....")
+    if action not in ("playbook", "gen-scaffold", "enc"):
+        print("Usage: kubesible playbook/gen-scaffold/enc .....")
         exit(1)
 
     if action == "playbook":
@@ -318,3 +396,5 @@ if __name__ == '__main__':
     if action == "gen-scaffold":
         scaffold_main()
 
+    if action == "enc":
+        enc_main()
