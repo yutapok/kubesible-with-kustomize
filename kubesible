@@ -171,6 +171,10 @@ def task2kustomize(cur_path, common, task, dry_run):
     name = task['name']
     kustomize = task['kustomize']
     body_fp = kustomize['apply']
+    kbconf = kustomize.get('kubeconfig')
+    if kbconf and kbconf != 'None':
+        k_conf = "{}/{}/{}".format(cur_path, KUBECONF_PATH, kbconf)
+
     _type = kustomize.get('type')
     wait = task.get('wait')
 
@@ -312,8 +316,17 @@ def playbook_main():
     cur_path = os.path.abspath(sys.argv[2])
     mp = _secret_to_env_mp(cur_path)
     for pair in mp.values():
-        k, v = pair.values()
-        os.environ.setdefault(k, v)
+        k, v, exec = pair.values()
+        if exec == "export":
+            os.environ.unsetenv(k)
+            os.environ.setdefault(k, v)
+        if exec == "eval":
+            rc, res = subprocess.getstatusoutput(v)
+            if rc != 0:
+               print("Error: failed secret process, exec: {} ,key: {}, val: {}".format(exec, k, v))
+               print(res)
+            os.environ.unsetenv(k)
+            os.environ.setdefault(k, res)
 
 
     if not os.path.isdir("{}/{}".format(cur_path, KUSTOMIZES_PATH)):
