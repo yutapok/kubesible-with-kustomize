@@ -48,7 +48,9 @@ $ kubesible gen-scaffold sample_project ./
 $ kubesible gen-scaffold sample_project ./
 ```
 create and edit yaml
-``` tasks/sample.yaml
+```
+#tasks/sample.yaml
+
 common:
   env: {{ vars.env }}
   namespace:  {{ vars.namespace }}
@@ -65,7 +67,9 @@ common:
       value: $aws_access_key_id
     type: None
 ```
-``` vars/sample.yaml
+```
+#vars/sample.yaml
+
 vars:
   env: dev
   namespace: dev
@@ -104,6 +108,16 @@ $ => Info: done encrypto to files/.secret.yml.enc
 $ kubesible playbook . sample_project/tasks/default.yaml sammple_project/vars/dev.yaml --dry_run
 # if ok
 $ kubesible playbook . sample_project/tasks/default.yaml sammple_project/vars/dev.yaml
+=>
+ --------------------------------------------------------------------
+[Complete] task: create secret AWS_KEY
+StatusCode: 0
+Mode: DryRun (Deploy)
+Command >>
+kubectl create secret generic aws-key --from-literal=aws-access-key=$aws-access-key -n dev --dry-run
+
+Stdout >>
+secret/aws-key created (dry run)
 ```
 
 ### Notice
